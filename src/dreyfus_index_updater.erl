@@ -31,11 +31,9 @@ update(IndexPid, Index) ->
     erlang:put(io_priority, {view_update, DbName, IndexName}),
     {ok, Db} = couch_db:open_int(DbName, []),
     try
-        %ExcludeIdRevs is [{Id1, Rev1}, {Id2, Rev2}, ...]
-        %The Rev is the final Rev, not purged Rev.
-        {ok, ExcludeIdRevs} = purge_index(Db, IndexPid, Index),
-        %% compute on all docs modified since we last computed.
-        TotalChanges = couch_db:count_changes_since(Db, CurSeq),
+        TotalUpdateChanges = couch_db:count_changes_since(Db, CurSeq),
+        TotalPurgeChanges = count_pending_purged_docs_since(Db, IndexPid),
+        TotalChanges = TotalUpdateChanges + TotalPurgeChanges,
 
         couch_task_status:add_task([
             {type, search_indexer},
@@ -50,12 +48,18 @@ update(IndexPid, Index) ->
         %% update status every half second
         couch_task_status:set_update_frequency(500),
 
+        %ExcludeIdRevs is [{Id1, Rev1}, {Id2, Rev2}, ...]
+        %The Rev is the final Rev, not purged Rev.
+        {ok, ExcludeIdRevs} = purge_index(Db, IndexPid, Index),
+        %% compute on all docs modified since we last computed.
+
         NewCurSeq = couch_db:get_update_seq(Db),
         Proc = get_os_process(Index#index.def_lang),
         try
             true = proc_prompt(Proc, [<<"add_fun">>, Index#index.def]),
             EnumFun = fun ?MODULE:load_docs/2,
-            Acc0 = {0, IndexPid, Db, Proc, TotalChanges, now(), ExcludeIdRevs},
+            [Changes] = couch_task_status:get([changes_done]),
+            Acc0 = {Changes, IndexPid, Db, Proc, TotalChanges, now(), ExcludeIdRevs},
             {ok, _} = couch_db:fold_changes(Db, CurSeq, EnumFun, Acc0, []),
             ok = clouseau_rpc:commit(IndexPid, NewCurSeq)
         after
@@ -104,6 +108,7 @@ purge_index(Db, IndexPid, Index) ->
                             [{Id, Rev} | Acc]
                     end
             end,
+            update_task(1),
             {Acc0, PurgeSeq}
         end,
 
@@ -115,6 +120,11 @@ purge_index(Db, IndexPid, Index) ->
     after
         ret_os_process(Proc)
     end.
+
+count_pending_purged_docs_since(Db, IndexPid) ->
+    {ok, DbPurgeSeq} = couch_db:get_purge_seq(Db),
+    {ok, IdxPurgeSeq} = clouseau_rpc:get_purge_seq(IndexPid),
+    DbPurgeSeq - IdxPurgeSeq.
 
 update_or_delete_index(IndexPid, Db, DI, Proc) ->
     #doc_info{id=Id, revs=[#rev_info{deleted=Del}|_]} = DI,
@@ -136,3 +146,14 @@ update_local_doc(Db, Index, PurgeSeq) ->
     DocId = dreyfus_util:get_local_purge_doc_id(Index#index.sig),
     DocContent = dreyfus_util:get_local_purge_doc_body(Db, DocId, PurgeSeq, Index),
     couch_db:update_doc(Db, DocContent, []).
+
+update_task(NumChanges) ->
+    [Changes, Total] = couch_task_status:get([changes_done, total_changes]),
+    Changes2 = Changes + NumChanges,
+    Progress = case Total of
+        0 ->
+            0;
+        _ ->
+            (Changes2 * 100) div Total
+    end,
+    couch_task_status:update([{progress, Progress}, {changes_done, Changes2}]).
