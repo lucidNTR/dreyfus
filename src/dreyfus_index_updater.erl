@@ -112,7 +112,7 @@ purge_index(Db, IndexPid, Index) ->
             {Acc0, PurgeSeq}
         end,
 
-        {ok, {ExcludeList, NewPurgeSeq}} = couch_db:fold_purged_docs(
+        {ok, {ExcludeList, NewPurgeSeq}} = couch_db:fold_purge_infos(
             Db, IdxPurgeSeq, FoldFun, {[], 0}, []),
         clouseau_rpc:set_purge_seq(IndexPid, NewPurgeSeq),
         update_local_doc(Db, Index, NewPurgeSeq),

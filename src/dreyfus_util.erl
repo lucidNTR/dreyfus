@@ -185,10 +185,12 @@ get_local_purge_doc_body(Db, LocalDocId, PurgeSeq, Index) ->
         ddoc_id = DDocId,
         sig = Sig
     } = Index,
+    {Mega, Secs, _} = os:timestamp(),
+    NowSecs = Mega * 1000000 + Secs,
     JsonList = {[
         {<<"_id">>, LocalDocId},
         {<<"purge_seq">>, PurgeSeq},
-        {<<"timestamp_utc">>, couch_util:utc_string()},
+        {<<"timestamp_utc">>, NowSecs},
         {<<"verify_module">>, <<"dreyfus_index">>},
         {<<"verify_function">>, <<"verify_index_exists">>},
         {<<"verify_options">>, {[
